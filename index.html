@@ -246,12 +246,17 @@ button{font-family:inherit;cursor:pointer}
     <div class="ytabs" id="yts"></div>
     <div class="card">
       <div class="ctit">Comparativo mensual</div>
+      <canvas id="chart-mensual" style="width:100%;height:220px;margin-bottom:8px"></canvas>
       <div style="overflow-x:auto">
         <table class="stbl"><thead><tr><th>Mes</th><th style="text-align:right">Ingresos</th><th style="text-align:right">Gastos</th><th style="text-align:right">Balance</th></tr></thead>
         <tbody id="rb"></tbody></table>
       </div>
     </div>
-    <div class="card"><div class="ctit">Promedios del a&ntilde;o</div><div id="ra"></div></div>
+    <div class="card">
+      <div class="ctit">Promedios del a&ntilde;o</div>
+      <canvas id="chart-promedio" style="width:100%;height:160px;margin-bottom:8px"></canvas>
+      <div id="ra"></div>
+    </div>
   </div>
 
   <!-- ALERTAS -->
@@ -573,13 +578,15 @@ function loadHistoricoFromFirebase(cb){
   }).catch(function(){ cb(); });
 }
 
+function lsS(k,v){try{localStorage.setItem(k,JSON.stringify(v));}catch(e){}}
+function lsG(k,def){try{var v=localStorage.getItem(k);return v!==null?JSON.parse(v):def;}catch(e){return def;}}
+
 function loadFromLS(){
   try{
     var d = JSON.parse(localStorage.getItem('mg_data'));
     if(d){ applyData(d); return; }
   }catch(e){}
   // Legacy keys
-  function lsG(k,def){try{var v=localStorage.getItem(k);return v!==null?JSON.parse(v):def;}catch(e){return def;}}
   tx  = lsG('mg_tx',[]);
   fix = lsG('mg_fix',INIT_FIX);
   bud = lsG('mg_bud',{Fijos:3100,Gasolina:400,Comida:800,Automercado:350,Farmacia:200,Otros:600});
@@ -769,20 +776,107 @@ function rFijos(){
 }
 
 /* ─ RESUMEN ─ */
+function drawBarChart(canvasId, labels, datasets, maxVal){
+  var canvas = q(canvasId);
+  if(!canvas) return;
+  var dpr = window.devicePixelRatio||1;
+  var W = canvas.offsetWidth||300;
+  var H = parseInt(canvas.style.height)||220;
+  canvas.width = W*dpr;
+  canvas.height = H*dpr;
+  canvas.style.width = W+'px';
+  canvas.style.height = H+'px';
+  var ctx = canvas.getContext('2d');
+  ctx.scale(dpr,dpr);
+  ctx.clearRect(0,0,W,H);
+
+  var padL=36,padR=8,padT=14,padB=38;
+  var chartW=W-padL-padR, chartH=H-padT-padB;
+  var n=labels.length, gW=chartW/n;
+  var nDs=datasets.length;
+  var bW=Math.min(gW*0.22, 18);
+  var gGap=(gW-(bW*nDs))/(nDs+1);
+
+  // Grid
+  var steps=4;
+  ctx.strokeStyle='rgba(128,128,128,0.15)';
+  ctx.lineWidth=1;
+  for(var i=0;i<=steps;i++){
+    var y=padT+chartH-(i/steps)*chartH;
+    ctx.beginPath(); ctx.moveTo(padL,y); ctx.lineTo(padL+chartW,y); ctx.stroke();
+    ctx.fillStyle='rgba(128,128,128,0.7)';
+    ctx.font='9px system-ui';
+    ctx.textAlign='right';
+    var lbl=maxVal>0?'$'+(Math.round(maxVal*i/steps/100)*100).toLocaleString():'';
+    ctx.fillText(lbl,padL-3,y+3);
+  }
+
+  // Bars
+  datasets.forEach(function(ds,di){
+    ctx.fillStyle=ds.color;
+    labels.forEach(function(lbl,li){
+      var val=ds.data[li]||0;
+      if(val===0) return;
+      var bH=maxVal>0?(val/maxVal)*chartH:0;
+      var x=padL+li*gW+gGap*(di+1)+bW*di;
+      var y=padT+chartH-bH;
+      ctx.beginPath();
+      ctx.roundRect ? ctx.roundRect(x,y,bW,bH,2) : ctx.rect(x,y,bW,bH);
+      ctx.fill();
+    });
+  });
+
+  // X labels
+  ctx.fillStyle='rgba(128,128,128,0.9)';
+  ctx.font='9px system-ui';
+  ctx.textAlign='center';
+  labels.forEach(function(lbl,li){
+    ctx.fillText(lbl,padL+li*gW+gW/2,H-padB+14);
+  });
+
+  // Legend
+  var legX=padL, legY=H-padB+26;
+  datasets.forEach(function(ds,di){
+    ctx.fillStyle=ds.color;
+    ctx.fillRect(legX,legY-7,10,8);
+    ctx.fillStyle='rgba(128,128,128,0.9)';
+    ctx.font='9px system-ui';
+    ctx.textAlign='left';
+    ctx.fillText(ds.label,legX+13,legY);
+    legX+=ctx.measureText(ds.label).width+30;
+  });
+}
+
 function rResumen(){
-  q('yts').innerHTML=[2022,2023,2024,2025,2026].map(function(y){
+  q('yts').innerHTML=[2022,2023,2024,2025,2026,2027].map(function(y){
     return '<button class="ytab'+(y===sumY?' on':'')+'" onclick="G.selY('+y+')">'+y+'</button>';
   }).join('');
   var data=H[sumY]||{},rows='',tI=0,tE=0,cnt=0;
+  var chartLabels=[],chartInc=[],chartExp=[],chartDiff=[];
+
   MO.forEach(function(m,mi){
-    if(!data[m])return;
+    if(!data[m]){
+      // For 2027 or missing months, only use user tx
+      var userTx=tx.filter(function(t){var d=new Date(t.d+'T12:00');return d.getFullYear()===sumY&&d.getMonth()===mi;});
+      var uI=userTx.filter(function(t){return t.tp==='i';}).reduce(function(a,t){return a+t.a;},0);
+      var uE=userTx.filter(function(t){return t.tp==='g';}).reduce(function(a,t){return a+t.a;},0);
+      if(uI===0&&uE===0) return;
+      var diff=uI-uE;
+      chartLabels.push(m.slice(0,3)); chartInc.push(uI); chartExp.push(uE); chartDiff.push(diff);
+      tI+=uI;tE+=uE;cnt++;
+      rows+='<tr><td style="padding:6px 3px;border-bottom:1px solid var(--sf2)">'+m.slice(0,3)+'<span style="font-size:9px;color:var(--gn);margin-left:3px">+</span></td>'
+        +'<td style="padding:6px 3px;text-align:right;border-bottom:1px solid var(--sf2)">'+fmt(uI)+'</td>'
+        +'<td style="padding:6px 3px;text-align:right;border-bottom:1px solid var(--sf2)">'+fmt(uE)+'</td>'
+        +'<td style="padding:6px 3px;text-align:right;border-bottom:1px solid var(--sf2);font-weight:600;color:'+(diff>=0?'var(--gn)':'var(--rd)')+'">'+fmt(diff,true)+'</td></tr>';
+      return;
+    }
     var hd=data[m];
-    // Add user-registered tx for this month on top of historical
     var userTx=tx.filter(function(t){var d=new Date(t.d+'T12:00');return d.getFullYear()===sumY&&d.getMonth()===mi;});
     var uI=userTx.filter(function(t){return t.tp==='i';}).reduce(function(a,t){return a+t.a;},0);
     var uE=userTx.filter(function(t){return t.tp==='g';}).reduce(function(a,t){return a+t.a;},0);
     var inc=hd.i+uI, exp=hd.e+uE, diff=inc-exp;
     tI+=inc;tE+=exp;cnt++;
+    chartLabels.push(m.slice(0,3)); chartInc.push(inc); chartExp.push(exp); chartDiff.push(diff);
     var hasNew=(uI>0||uE>0);
     rows+='<tr><td style="padding:6px 3px;border-bottom:1px solid var(--sf2)">'+m.slice(0,3)+(hasNew?'<span style="font-size:9px;color:var(--gn);margin-left:3px">+</span>':'')+'</td>'
       +'<td style="padding:6px 3px;text-align:right;border-bottom:1px solid var(--sf2)">'+fmt(inc)+'</td>'
@@ -792,17 +886,37 @@ function rResumen(){
   rows+='<tr class="tot"><td style="padding:6px 3px">Total</td><td style="padding:6px 3px;text-align:right">'+fmt(tI)+'</td><td style="padding:6px 3px;text-align:right">'+fmt(tE)+'</td>'
     +'<td style="padding:6px 3px;text-align:right;font-weight:700;color:'+(tI>=tE?'var(--gn)':'var(--rd)')+'">'+fmt(tI-tE,true)+'</td></tr>';
   q('rb').innerHTML=rows;
-  var ai=cnt?tI/cnt:0,ae=cnt?tE/cnt:0;
+
+  // Draw monthly bar chart
+  var maxMensual = Math.max.apply(null, chartInc.concat(chartExp).concat([1]));
+  drawBarChart('chart-mensual', chartLabels, [
+    {label:'Ingresos', color:'#2196a8', data:chartInc},
+    {label:'Gastos',   color:'#c0392b', data:chartExp},
+    {label:'Balance',  color:'#27ae60', data:chartDiff.map(function(v){return Math.max(v,0);})}
+  ], maxMensual*1.1);
+
+  // Promedios
+  var ai=cnt?tI/cnt:0, ae=cnt?tE/cnt:0;
   q('ra').innerHTML=[['Promedio ingresos',fmt(ai),'var(--gn)'],['Promedio gastos',fmt(ae),'var(--rd)'],
     ['Promedio balance',fmt(ai-ae,true),ai>=ae?'var(--gn)':'var(--rd)'],
     ['Meses con super\u00e1vit',MO.filter(function(m,mi){
-      var hd=data[m];if(!hd)return false;
+      var hd=data[m];
       var userTx=tx.filter(function(t){var d=new Date(t.d+'T12:00');return d.getFullYear()===sumY&&d.getMonth()===mi;});
       var uI=userTx.filter(function(t){return t.tp==='i';}).reduce(function(a,t){return a+t.a;},0);
       var uE=userTx.filter(function(t){return t.tp==='g';}).reduce(function(a,t){return a+t.a;},0);
-      return (hd.i+uI)>(hd.e+uE);
+      var inc=(hd?hd.i:0)+uI, exp=(hd?hd.e:0)+uE;
+      return (inc>0||exp>0) && inc>exp;
     }).length+' / '+cnt,'var(--tx)']
   ].map(function(r){return '<div class="tr-row"><span>'+r[0]+'</span><span style="font-weight:700;color:'+r[2]+'">'+r[1]+'</span></div>';}).join('');
+
+  // Draw promedio bar chart
+  setTimeout(function(){
+    drawBarChart('chart-promedio', ['Promedios'], [
+      {label:'Ingresos', color:'#2196a8', data:[ai]},
+      {label:'Gastos',   color:'#c0392b', data:[ae]},
+      {label:'Balance',  color:'#27ae60', data:[Math.max(ai-ae,0)]}
+    ], Math.max(ai,ae)*1.2);
+  }, 50);
 }
 
 /* ─ ALERTAS ─ */
@@ -985,7 +1099,7 @@ return {
   var saved=localStorage.getItem('mg_s1')||'2026-5';
   function buildSel(id){
     var el=document.getElementById(id);el.innerHTML='';
-    [2022,2023,2024,2025,2026].forEach(function(y){
+    [2022,2023,2024,2025,2026,2027].forEach(function(y){
       MO.forEach(function(m,i){
         if(y===2022&&i<5)return;
         var o=document.createElement('option');o.value=y+'-'+i;o.textContent=m+' '+y;el.appendChild(o);
