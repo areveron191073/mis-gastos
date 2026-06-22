@@ -699,20 +699,22 @@ function txItem(t,i,isIncome){
 /* ─ GASTOS ─ */
 function rGastos(){
   var s=psel('s2'),ts=gtx(s.y,s.m,'g').slice().sort(function(a,b){return new Date(b.d)-new Date(a.d);});
-  q('g-total').textContent=fmt(ts.reduce(function(a,t){return a+t.a;},0));
   var el=q('gl');
 
-  // Populate filter with categories that have transactions
+  // Populate filter — always show all categories, not just ones with data
   var filterEl=q('g-cat-filter');
+  var activeCat=filterEl?filterEl.value:'';
+
+  // Always rebuild options preserving selection
   if(filterEl){
-    var usedCats=GCAT_LIST.filter(function(c){return ts.some(function(t){return (t.ct||'Otros')===c;});});
-    var curVal=filterEl.value;
     filterEl.innerHTML='<option value="">Todas las categorías</option>'
-      +usedCats.map(function(c){return '<option value="'+c+'"'+(c===curVal?' selected':'')+'>'+c+'</option>';}).join('');
-    filterEl.value=curVal;
+      +GCAT_LIST.map(function(c){return '<option value="'+c+'"'+(c===activeCat?' selected':'')+'>'+c+'</option>';}).join('');
+    filterEl.value=activeCat;
   }
 
-  var activeCat=filterEl?filterEl.value:'';
+  // Total shown = filtered total if a category is selected, else full total
+  var filteredTs = activeCat ? ts.filter(function(t){return (t.ct||'Otros')===activeCat;}) : ts;
+  q('g-total').textContent=fmt(filteredTs.reduce(function(a,t){return a+t.a;},0));
 
   if(!ts.length){el.innerHTML='<div class="empty">Sin gastos este mes.<br>Usa <b>+ Nuevo gasto</b>.</div>';return;}
 
