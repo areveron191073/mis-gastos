@@ -186,6 +186,11 @@ button{font-family:inherit;cursor:pointer}
           <button class="btn-del" onclick="G.clearMonth('g')" title="Borrar todos los gastos del mes" style="font-size:11px;padding:4px 8px;display:flex;align-items:center;gap:3px"><i class="ti ti-trash"></i> Borrar mes</button>
         </div>
       </div>
+      <div style="margin-bottom:10px">
+        <select id="g-cat-filter" onchange="G.rGastos()" style="width:100%;font-size:12px;padding:6px 8px;border-radius:8px;border:1px solid var(--bd);background:var(--sf2);color:var(--tx)">
+          <option value="">Todas las categorías</option>
+        </select>
+      </div>
       <div id="gl"></div>
     </div>
     <div style="text-align:center"><button class="bg" onclick="G.openModal('gasto')"><i class="ti ti-plus"></i> Nuevo gasto</button></div>
@@ -696,8 +701,48 @@ function rGastos(){
   var s=psel('s2'),ts=gtx(s.y,s.m,'g').slice().sort(function(a,b){return new Date(b.d)-new Date(a.d);});
   q('g-total').textContent=fmt(ts.reduce(function(a,t){return a+t.a;},0));
   var el=q('gl');
+
+  // Populate filter with categories that have transactions
+  var filterEl=q('g-cat-filter');
+  if(filterEl){
+    var usedCats=GCAT_LIST.filter(function(c){return ts.some(function(t){return (t.ct||'Otros')===c;});});
+    var curVal=filterEl.value;
+    filterEl.innerHTML='<option value="">Todas las categorías</option>'
+      +usedCats.map(function(c){return '<option value="'+c+'"'+(c===curVal?' selected':'')+'>'+c+'</option>';}).join('');
+    filterEl.value=curVal;
+  }
+
+  var activeCat=filterEl?filterEl.value:'';
+
   if(!ts.length){el.innerHTML='<div class="empty">Sin gastos este mes.<br>Usa <b>+ Nuevo gasto</b>.</div>';return;}
-  el.innerHTML=ts.map(function(t,i){return txItem(t,i,false);}).join('');
+
+  // Group by category
+  var cats={};
+  GCAT_LIST.forEach(function(c){cats[c]=[];});
+  ts.forEach(function(t){
+    var c=t.ct||'Otros';
+    if(!cats[c]) cats[c]=[];
+    cats[c].push(t);
+  });
+
+  var html='';
+  var catsToShow=activeCat ? [activeCat] : GCAT_LIST;
+
+  catsToShow.forEach(function(cat){
+    var items=cats[cat];
+    if(!items||!items.length) return;
+    var catTotal=items.reduce(function(a,t){return a+t.a;},0);
+    html+='<div style="margin-bottom:6px">'
+      +'<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 2px 4px;border-bottom:2px solid var(--bd)">'
+      +'<span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--tx2)">'+cat+'</span>'
+      +'<span style="font-size:12px;font-weight:700;color:var(--rd)">'+fmt(catTotal)+'</span>'
+      +'</div>';
+    items.forEach(function(t,i){ html+=txItem(t,i,false); });
+    html+='</div>';
+  });
+
+  if(!html) html='<div class="empty">Sin gastos en esta categoría.</div>';
+  el.innerHTML=html;
 }
 
 /* ─ INGRESOS ─ */
